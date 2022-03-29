@@ -1172,7 +1172,7 @@ namespace SharpWebServer
                 var HostName_offset = BitConverter.ToInt16(NTLM, 48);
                 var HostName = NTLM.Skip(HostName_offset).Take(HostName_len).ToArray();
                 var HostNameString = System.Text.Encoding.Unicode.GetString(HostName);
-                var retval = UserString + "::" + HostNameString + ":" + LMHash + ":" + NTHash + nonce;
+                var retval = UserString + "::" + HostNameString + ":" + LMHash + ":" + NTHash + ":" + nonce;
                 return retval;
             }
             else if (NTHash_len > 24)
@@ -1207,7 +1207,7 @@ namespace SharpWebServer
 
             sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host).Length)));
             sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(Encoding.Unicode.GetBytes(_Host).Length)));
-            sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(48)));
+            sb1.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(56)));
             Console.WriteLine(Convert.ToBase64String(sb1.ToArray()));
 
             // Hostname in upper
@@ -1235,7 +1235,7 @@ namespace SharpWebServer
 
             sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(content.ToArray().Length)));
             sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(content.ToArray().Length)));
-            sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(48 + Encoding.Unicode.GetBytes(_FQDN).Length)));
+            sb2.AddRange(System.BitConverter.GetBytes(Convert.ToInt32(56 + Encoding.Unicode.GetBytes(_Host).Length)));
 
             flags |= 0x00000001; // Negotiate Unicode
             flags |= 0x00000004; // Request Target
@@ -1244,6 +1244,7 @@ namespace SharpWebServer
             flags |= 0x00080000; // negotiate Always Sign
             flags |= 0x00800000; // Negotiate target supplied
             flags |= 0x20000000; // Netogiate 128 bit security
+            flags |= 0x2000000; // Netogiate 128 bit security
             flags |= 0x80000000; // Negotiate 56 bit security
 
 
@@ -1256,6 +1257,12 @@ namespace SharpWebServer
             ret.AddRange(System.BitConverter.GetBytes(flags)); // The flags for negotiation
             ret.AddRange(System.BitConverter.GetBytes(LocalNonce)); // The challenge string
             ret.AddRange(System.BitConverter.GetBytes(Convert.ToInt64(0))); // Context (empty)
+            // Add Version
+            ret.AddRange(System.BitConverter.GetBytes(Convert.ToByte(5))); // Version 5
+            ret.AddRange(System.BitConverter.GetBytes(Convert.ToByte(2))); // Subversion 2
+            ret.AddRange(System.BitConverter.GetBytes(Convert.ToInt16(3790))); // Build 3790
+            ret.AddRange(System.BitConverter.GetBytes(0x0000000f)); // 0x0000000f
+
             ret.AddRange(sb2.ToArray()); //Security buffer 2 w info about where to find the content data
             ret.AddRange(Encoding.Unicode.GetBytes(_Host.ToUpper())); // The hostname in upper case
             ret.AddRange(content.ToArray()); // The content block
